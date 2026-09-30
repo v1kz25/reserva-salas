@@ -1,0 +1,19 @@
+# Repos independientes
+back/
+front/
+
+# Notas locales
+CLAUDE.md
+SETUP.md
+.claude/
+
+# SO
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp

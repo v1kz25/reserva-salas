@@ -1,0 +1,381 @@
+openapi: 3.1.0
+info:
+  title: Reserva de salas API
+  version: 0.1.0
+  description: |
+    API para gestionar salas de reuniones y sus reservas.
+
+    Reglas de negocio de las reservas:
+    - No puede haber reservas solapadas en la misma sala (`409`).
+    - `horaFin` debe ser posterior a `horaInicio` (`400`).
+    - No se puede reservar en el pasado (`400`).
+
+    Todos los errores usan el formato `ProblemDetail` (RFC 9457).
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8080
+    description: Desarrollo local
+security: []
+tags:
+  - name: Salas
+    description: Salas de reuniones disponibles
+  - name: Reservas
+    description: Reservas de una sala en una franja horaria
+
+paths:
+  /api/salas:
+    get:
+      tags: [Salas]
+      operationId: listarSalas
+      summary: Lista todas las salas
+      responses:
+        '200':
+          description: Salas ordenadas por nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Sala'
+    post:
+      tags: [Salas]
+      operationId: crearSala
+      summary: Crea una sala
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SalaRequest'
+      responses:
+        '201':
+          description: Sala creada
+          headers:
+            Location:
+              description: URL de la sala creada
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sala'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '409':
+          description: Ya existe una sala con ese nombre
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/salas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Salas]
+      operationId: obtenerSala
+      summary: Obtiene una sala
+      responses:
+        '200':
+          description: Sala encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sala'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+    put:
+      tags: [Salas]
+      operationId: modificarSala
+      summary: Modifica una sala
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SalaRequest'
+      responses:
+        '200':
+          description: Sala modificada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sala'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: Ya existe otra sala con ese nombre
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    delete:
+      tags: [Salas]
+      operationId: eliminarSala
+      summary: Elimina una sala
+      responses:
+        '204':
+          description: Sala eliminada
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: La sala tiene reservas futuras y no se puede eliminar
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/reservas:
+    get:
+      tags: [Reservas]
+      operationId: listarReservas
+      summary: Lista reservas, con filtros opcionales
+      parameters:
+        - name: salaId
+          in: query
+          required: false
+          description: Solo las reservas de esta sala
+          schema:
+            type: integer
+            format: int64
+        - name: fecha
+          in: query
+          required: false
+          description: Solo las reservas de este día
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Reservas ordenadas por fecha y hora de inicio
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Reserva'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+    post:
+      tags: [Reservas]
+      operationId: crearReserva
+      summary: Crea una reserva
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReservaRequest'
+      responses:
+        '201':
+          description: Reserva creada
+          headers:
+            Location:
+              description: URL de la reserva creada
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reserva'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '404':
+          description: La sala indicada no existe
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          $ref: '#/components/responses/Solapamiento'
+
+  /api/reservas/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Reservas]
+      operationId: obtenerReserva
+      summary: Obtiene una reserva
+      responses:
+        '200':
+          description: Reserva encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reserva'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+    delete:
+      tags: [Reservas]
+      operationId: cancelarReserva
+      summary: Cancela una reserva
+      description: La reserva se elimina y la franja queda libre.
+      responses:
+        '204':
+          description: Reserva cancelada
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+
+  schemas:
+    Sala:
+      type: object
+      required: [id, nombre, capacidad, planta]
+      properties:
+        id:
+          type: integer
+          format: int64
+          examples: [1]
+        nombre:
+          type: string
+          examples: [Sala Atlántico]
+        capacidad:
+          type: integer
+          examples: [8]
+        planta:
+          type: integer
+          examples: [2]
+
+    SalaRequest:
+      type: object
+      required: [nombre, capacidad, planta]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 100
+        capacidad:
+          type: integer
+          minimum: 1
+        planta:
+          type: integer
+          description: Puede ser negativa (sótanos)
+
+    Reserva:
+      type: object
+      required: [id, salaId, fecha, horaInicio, horaFin, responsable, motivo]
+      properties:
+        id:
+          type: integer
+          format: int64
+          examples: [1]
+        salaId:
+          type: integer
+          format: int64
+          examples: [1]
+        fecha:
+          type: string
+          format: date
+          examples: ['2026-10-15']
+        horaInicio:
+          $ref: '#/components/schemas/Hora'
+        horaFin:
+          $ref: '#/components/schemas/Hora'
+        responsable:
+          type: string
+          examples: [Ana García]
+        motivo:
+          type: string
+          examples: [Reunión de planificación]
+
+    ReservaRequest:
+      type: object
+      required: [salaId, fecha, horaInicio, horaFin, responsable, motivo]
+      properties:
+        salaId:
+          type: integer
+          format: int64
+        fecha:
+          type: string
+          format: date
+          description: No puede ser anterior a hoy
+        horaInicio:
+          $ref: '#/components/schemas/Hora'
+        horaFin:
+          $ref: '#/components/schemas/Hora'
+        responsable:
+          type: string
+          minLength: 1
+          maxLength: 100
+        motivo:
+          type: string
+          minLength: 1
+          maxLength: 255
+
+    Hora:
+      type: string
+      description: Hora local en formato `HH:mm`
+      pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+      examples: ['09:30']
+
+    ProblemDetail:
+      type: object
+      description: Error según RFC 9457
+      required: [title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+        title:
+          type: string
+          examples: [Reserva solapada]
+        status:
+          type: integer
+          examples: [409]
+        detail:
+          type: string
+          examples: [La sala 1 ya está reservada el 2026-10-15 de 09:00 a 10:00]
+        instance:
+          type: string
+          format: uri-reference
+          examples: [/api/reservas]
+        errores:
+          type: array
+          description: Solo en errores de validación (`400`)
+          items:
+            $ref: '#/components/schemas/ErrorCampo'
+
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          examples: [horaFin]
+        mensaje:
+          type: string
+          examples: [debe ser posterior a horaInicio]
+
+  responses:
+    ErrorValidacion:
+      description: Datos no válidos
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+    NoEncontrado:
+      description: Recurso no encontrado
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+    Solapamiento:
+      description: La reserva se solapa con otra de la misma sala
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
