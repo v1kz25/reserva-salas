@@ -9,7 +9,7 @@ Este repositorio es el punto de entrada del proyecto. Contiene el **contrato de 
 | Repo | Contenido | Stack |
 |---|---|---|
 | [`reserva-salas`](https://github.com/v1kz25/reserva-salas) | Contrato de la API (`contrato/openapi.yaml`) y documentación | OpenAPI 3.1 |
-| [`reserva-salas-back`](https://github.com/v1kz25/reserva-salas-back) | API REST | Java 21, Spring Boot 3, H2 |
+| [`reserva-salas-back`](https://github.com/v1kz25/reserva-salas-back) | API REST | Java 21, Spring Boot 4, H2 |
 | [`reserva-salas-front`](https://github.com/v1kz25/reserva-salas-front) | Aplicación web | Angular 19 |
 
 ## Dominio
