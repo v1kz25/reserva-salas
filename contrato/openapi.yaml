@@ -259,6 +259,9 @@ paths:
       tags: [Salas]
       operationId: eliminarSala
       summary: Elimina una sala
+      description: |
+        Solo si no tiene reservas de hoy en adelante (`409`). Sus reservas pasadas (y sus
+        invitaciones) se eliminan con ella.
       responses:
         '204':
           description: Sala eliminada
