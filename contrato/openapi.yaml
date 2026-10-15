@@ -703,8 +703,9 @@ paths:
       operationId: modificarUsuario
       summary: Modifica nombre, rol y estado de un usuario (solo `ADMIN`)
       description: |
-        Un `ADMIN` no puede desactivarse ni quitarse el rol `ADMIN` a sí mismo (`409`). Si cambia
-        el rol o se desactiva al usuario, se cierran sus sesiones.
+        Un `ADMIN` no puede desactivarse ni quitarse el rol `ADMIN` a sí mismo (`409`), y ningún
+        cambio puede dejar la aplicación sin al menos un `ADMIN` activo (`409`). Si cambia el rol,
+        se desactiva al usuario o se le cambia la contraseña, se cierran sus sesiones.
       requestBody:
         required: true
         content:
@@ -731,7 +732,7 @@ paths:
         '404':
           $ref: '#/components/responses/NoEncontrado'
         '409':
-          description: Un administrador no puede desactivarse ni quitarse el rol a sí mismo
+          description: Un administrador no puede desactivarse ni quitarse el rol a sí mismo, o el cambio dejaría la aplicación sin ningún administrador activo
           content:
             application/problem+json:
               schema:
