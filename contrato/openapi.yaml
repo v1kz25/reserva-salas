@@ -17,7 +17,18 @@ info:
       Sin sesión (o con la sesión caducada) responden `401`.
     - Roles `USER` y `ADMIN`. Un `USER` solo cancela sus propias reservas; un `ADMIN`, cualquiera.
       Crear, modificar y eliminar salas es solo para `ADMIN`. Sin permiso se responde `403`.
-    - El responsable de una reserva es siempre el usuario que la crea.
+    - El responsable (organizador) de una reserva es siempre el usuario que la crea.
+    - Un usuario desactivado no puede iniciar sesión. Al desactivar a un usuario o cambiar su
+      rol se cierran sus sesiones abiertas.
+
+    Privacidad de las reservas:
+    - El organizador, sus invitados (pendientes o aceptados) y los `ADMIN` ven la reserva completa
+      (`detalle: COMPLETO`).
+    - El resto ve solo sala, fecha y franja (`detalle: OCUPADA`), sin organizador, motivo ni
+      invitaciones.
+
+    Zona horaria: «hoy» y «mañana» se calculan con la zona horaria configurada
+    (`GET /api/config/zona-horaria`).
 
     Protección CSRF:
     - El servidor envía el token en la cookie `XSRF-TOKEN` (legible desde JavaScript).
@@ -42,6 +53,14 @@ tags:
     description: Salas de reuniones disponibles
   - name: Reservas
     description: Reservas de una sala en una franja horaria
+  - name: Usuarios
+    description: Gestión de usuarios (solo `ADMIN`) y buscador de usuarios
+  - name: Amistades
+    description: Solicitudes de amistad y amigos
+  - name: Invitaciones
+    description: Invitaciones de amigos a una reserva
+  - name: Configuración
+    description: Configuración de la aplicación
 
 paths:
   /api/auth/csrf:
@@ -264,8 +283,36 @@ paths:
     get:
       tags: [Reservas]
       operationId: listarReservas
-      summary: Lista reservas, con filtros opcionales
+      summary: Lista reservas, paginadas y con filtros opcionales
+      description: |
+        Las reservas en las que el usuario no participa salen con `detalle: OCUPADA`.
+        Con `mis=true` solo salen las que organiza y aquellas a las que está invitado
+        (pendiente o aceptada), siempre con `detalle: COMPLETO`.
       parameters:
+        - name: mis
+          in: query
+          required: false
+          description: Solo «Mis reservas» (organizadas e invitaciones pendientes o aceptadas)
+          schema:
+            type: boolean
+            default: false
+        - name: page
+          in: query
+          required: false
+          description: Número de página, empezando en 0
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          required: false
+          description: Tamaño de página (máximo 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
         - name: salaId
           in: query
           required: false
@@ -292,13 +339,11 @@ paths:
             format: date
       responses:
         '200':
-          description: Reservas ordenadas por fecha y hora de inicio
+          description: Página de reservas ordenadas por fecha y hora de inicio
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Reserva'
+                $ref: '#/components/schemas/PaginaReservas'
         '400':
           $ref: '#/components/responses/ErrorValidacion'
         '401':
@@ -352,6 +397,9 @@ paths:
       tags: [Reservas]
       operationId: obtenerReserva
       summary: Obtiene una reserva
+      description: |
+        Con `detalle: COMPLETO` incluye las invitaciones. Si el usuario no participa, solo se
+        devuelven sala, fecha y franja (`detalle: OCUPADA`).
       responses:
         '200':
           description: Reserva encontrada
@@ -368,8 +416,8 @@ paths:
       operationId: cancelarReserva
       summary: Cancela una reserva
       description: |
-        La reserva se elimina y la franja queda libre. Un `USER` solo puede cancelar sus propias
-        reservas; un `ADMIN`, cualquiera.
+        La reserva se elimina, la franja queda libre y se eliminan sus invitaciones. Un `USER`
+        solo puede cancelar sus propias reservas; un `ADMIN`, cualquiera.
       responses:
         '204':
           description: Reserva cancelada
@@ -383,6 +431,568 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
         '404':
           $ref: '#/components/responses/NoEncontrado'
+
+  /api/reservas/{id}/invitaciones:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Invitaciones]
+      operationId: invitarAReserva
+      summary: Invita a un amigo a la reserva
+      description: |
+        Solo el organizador. El invitado debe ser amigo confirmado y estar activo. Aforo:
+        organizador + invitaciones pendientes + aceptadas no pueden superar la capacidad de la sala.
+        No se invita a reservas pasadas.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitacionRequest'
+      responses:
+        '201':
+          description: Invitación creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitacion'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: No eres el organizador de la reserva, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: No es tu amigo, ya está invitado, se supera el aforo o la reserva ya ha pasado
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/reservas/{id}/invitaciones/{invitacionId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: invitacionId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    delete:
+      tags: [Invitaciones]
+      operationId: retirarInvitacion
+      summary: Retira una invitación
+      description: Solo el organizador.
+      responses:
+        '204':
+          description: Invitación retirada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: No eres el organizador de la reserva, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+
+  /api/invitaciones/pendientes:
+    get:
+      tags: [Invitaciones]
+      operationId: listarInvitacionesPendientes
+      summary: Lista mis invitaciones sin responder
+      description: Solo de reservas que aún no han pasado, ordenadas por fecha de la reserva.
+      responses:
+        '200':
+          description: Invitaciones pendientes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InvitacionRecibida'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /api/invitaciones/{id}/aceptar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Invitaciones]
+      operationId: aceptarInvitacion
+      summary: Acepta una invitación
+      description: Solo el invitado. Se puede aceptar una invitación pendiente.
+      responses:
+        '204':
+          description: Invitación aceptada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: No existe o no es tuya
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: La invitación ya no está pendiente o la reserva ya ha pasado
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/invitaciones/{id}/rechazar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Invitaciones]
+      operationId: rechazarInvitacion
+      summary: Rechaza una invitación
+      description: |
+        Solo el invitado. Vale para una invitación pendiente o ya aceptada (dejar de asistir),
+        mientras la reserva no haya pasado.
+      responses:
+        '204':
+          description: Invitación rechazada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: No existe o no es tuya
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: La invitación ya estaba rechazada o la reserva ya ha pasado
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/usuarios:
+    get:
+      tags: [Usuarios]
+      operationId: listarUsuarios
+      summary: Lista los usuarios (solo `ADMIN`)
+      responses:
+        '200':
+          description: Usuarios ordenados por nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UsuarioAdmin'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+    post:
+      tags: [Usuarios]
+      operationId: crearUsuario
+      summary: Crea un usuario (solo `ADMIN`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsuarioNuevoRequest'
+      responses:
+        '201':
+          description: Usuario creado
+          headers:
+            Location:
+              description: URL del usuario creado
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsuarioAdmin'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: Ya existe un usuario con ese email
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/usuarios/buscar:
+    get:
+      tags: [Usuarios, Amistades]
+      operationId: buscarUsuarios
+      summary: Busca usuarios por nombre
+      description: |
+        Para cualquier usuario autenticado. Busca por nombre sin distinguir mayúsculas ni
+        acentos. Excluye al propio usuario y a los desactivados. Como máximo 20 resultados.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Texto a buscar (de 2 a 100 caracteres)
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+      responses:
+        '200':
+          description: Usuarios encontrados, ordenados por nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UsuarioResumen'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /api/usuarios/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Usuarios]
+      operationId: obtenerUsuario
+      summary: Obtiene un usuario (solo `ADMIN`)
+      responses:
+        '200':
+          description: Usuario
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsuarioAdmin'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+    put:
+      tags: [Usuarios]
+      operationId: modificarUsuario
+      summary: Modifica nombre, rol y estado de un usuario (solo `ADMIN`)
+      description: |
+        Un `ADMIN` no puede desactivarse ni quitarse el rol `ADMIN` a sí mismo (`409`). Si cambia
+        el rol o se desactiva al usuario, se cierran sus sesiones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsuarioCambioRequest'
+      responses:
+        '200':
+          description: Usuario modificado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsuarioAdmin'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+        '409':
+          description: Un administrador no puede desactivarse ni quitarse el rol a sí mismo
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/usuarios/{id}/password:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      tags: [Usuarios]
+      operationId: cambiarPasswordUsuario
+      summary: Cambia la contraseña de un usuario (solo `ADMIN`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordRequest'
+      responses:
+        '204':
+          description: Contraseña cambiada
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          $ref: '#/components/responses/NoEncontrado'
+
+  /api/amistades:
+    get:
+      tags: [Amistades]
+      operationId: listarAmigos
+      summary: Lista mis amigos
+      responses:
+        '200':
+          description: Amigos ordenados por nombre
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Amigo'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /api/amistades/{usuarioId}:
+    parameters:
+      - name: usuarioId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    delete:
+      tags: [Amistades]
+      operationId: eliminarAmistad
+      summary: Elimina una amistad
+      description: Cualquiera de los dos puede hacerlo. Las invitaciones ya enviadas se mantienen.
+      responses:
+        '204':
+          description: Amistad eliminada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: No sois amigos
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/amistades/solicitudes:
+    post:
+      tags: [Amistades]
+      operationId: enviarSolicitudAmistad
+      summary: Envía una solicitud de amistad
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SolicitudAmistadRequest'
+      responses:
+        '201':
+          description: Solicitud enviada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SolicitudAmistad'
+        '400':
+          description: Datos no válidos, o la solicitud es a ti mismo
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: El usuario no existe o está desactivado
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: Ya sois amigos o ya hay una solicitud pendiente entre vosotros
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/amistades/solicitudes/recibidas:
+    get:
+      tags: [Amistades]
+      operationId: listarSolicitudesRecibidas
+      summary: Lista las solicitudes pendientes que he recibido
+      responses:
+        '200':
+          description: Solicitudes pendientes, las más recientes primero
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SolicitudAmistad'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /api/amistades/solicitudes/enviadas:
+    get:
+      tags: [Amistades]
+      operationId: listarSolicitudesEnviadas
+      summary: Lista las solicitudes pendientes que he enviado
+      responses:
+        '200':
+          description: Solicitudes pendientes, las más recientes primero
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SolicitudAmistad'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
+  /api/amistades/solicitudes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      tags: [Amistades]
+      operationId: retirarSolicitudAmistad
+      summary: Retira una solicitud que he enviado
+      responses:
+        '204':
+          description: Solicitud retirada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: No existe, no es tuya o ya no está pendiente
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/amistades/solicitudes/{id}/aceptar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Amistades]
+      operationId: aceptarSolicitudAmistad
+      summary: Acepta una solicitud recibida
+      responses:
+        '204':
+          description: Solicitud aceptada (ya sois amigos)
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: No existe, no es para ti o ya no está pendiente
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/amistades/solicitudes/{id}/rechazar:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [Amistades]
+      operationId: rechazarSolicitudAmistad
+      summary: Rechaza una solicitud recibida
+      description: La solicitud se elimina; más adelante se puede volver a enviar.
+      responses:
+        '204':
+          description: Solicitud rechazada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+        '404':
+          description: No existe, no es para ti o ya no está pendiente
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /api/config/zona-horaria:
+    get:
+      tags: [Configuración]
+      operationId: obtenerZonaHoraria
+      summary: Obtiene la zona horaria de la aplicación
+      description: Para cualquier usuario autenticado. Al arrancar es `APP_TIMEZONE`.
+      responses:
+        '200':
+          description: Zona horaria actual
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZonaHoraria'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+    put:
+      tags: [Configuración]
+      operationId: cambiarZonaHoraria
+      summary: Cambia la zona horaria (solo `ADMIN`)
+      description: Se aplica en caliente y se guarda en la base de datos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ZonaHoraria'
+      responses:
+        '200':
+          description: Zona horaria cambiada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZonaHoraria'
+        '400':
+          description: Identificador IANA no válido o vacío
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
 
 components:
   securitySchemes:
@@ -437,7 +1047,10 @@ components:
 
     Reserva:
       type: object
-      required: [id, salaId, fecha, horaInicio, horaFin, usuarioId, responsable, motivo]
+      description: |
+        Con `detalle: OCUPADA` (el usuario no participa) solo se envían `id`, `salaId`, `fecha`,
+        `horaInicio`, `horaFin` y `detalle`.
+      required: [id, salaId, fecha, horaInicio, horaFin, detalle]
       properties:
         id:
           type: integer
@@ -468,6 +1081,34 @@ components:
         motivo:
           type: string
           examples: [Reunión de planificación]
+        detalle:
+          type: string
+          enum: [COMPLETO, OCUPADA]
+          description: Si el usuario ve la reserva completa o solo como franja ocupada
+        invitaciones:
+          type: array
+          description: 'Solo en `GET /api/reservas/{id}` con `detalle: COMPLETO`'
+          items:
+            $ref: '#/components/schemas/Invitacion'
+
+    PaginaReservas:
+      type: object
+      required: [content, totalElements, totalPages, number, size]
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reserva'
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+        number:
+          type: integer
+          description: Página actual, empezando en 0
+        size:
+          type: integer
 
     ReservaRequest:
       type: object
@@ -510,6 +1151,172 @@ components:
     Rol:
       type: string
       enum: [USER, ADMIN]
+
+    UsuarioAdmin:
+      type: object
+      required: [id, email, nombre, rol, activo, fechaCreacion]
+      properties:
+        id:
+          type: integer
+          format: int64
+        email:
+          type: string
+          format: email
+        nombre:
+          type: string
+        rol:
+          $ref: '#/components/schemas/Rol'
+        activo:
+          type: boolean
+        fechaCreacion:
+          type: string
+          format: date-time
+
+    UsuarioResumen:
+      type: object
+      required: [id, nombre]
+      properties:
+        id:
+          type: integer
+          format: int64
+        nombre:
+          type: string
+
+    UsuarioNuevoRequest:
+      type: object
+      required: [email, nombre, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 100
+        password:
+          $ref: '#/components/schemas/Password'
+        rol:
+          allOf:
+            - $ref: '#/components/schemas/Rol'
+          default: USER
+
+    UsuarioCambioRequest:
+      type: object
+      required: [nombre, rol, activo]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 100
+        rol:
+          $ref: '#/components/schemas/Rol'
+        activo:
+          type: boolean
+
+    PasswordRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          $ref: '#/components/schemas/Password'
+
+    Password:
+      type: string
+      description: De 8 a 72 caracteres (y como mucho 72 bytes en UTF-8)
+      minLength: 8
+      maxLength: 72
+      writeOnly: true
+
+    Amigo:
+      type: object
+      required: [usuarioId, nombre, desde]
+      properties:
+        usuarioId:
+          type: integer
+          format: int64
+        nombre:
+          type: string
+        desde:
+          type: string
+          format: date-time
+
+    SolicitudAmistad:
+      type: object
+      required: [id, usuario, fecha]
+      properties:
+        id:
+          type: integer
+          format: int64
+        usuario:
+          description: La otra persona (quien la envía en recibidas; a quien va en enviadas)
+          allOf:
+            - $ref: '#/components/schemas/UsuarioResumen'
+        fecha:
+          type: string
+          format: date-time
+
+    SolicitudAmistadRequest:
+      type: object
+      required: [usuarioId]
+      properties:
+        usuarioId:
+          type: integer
+          format: int64
+
+    Invitacion:
+      type: object
+      required: [id, reservaId, usuarioId, nombre, estado]
+      properties:
+        id:
+          type: integer
+          format: int64
+        reservaId:
+          type: integer
+          format: int64
+        usuarioId:
+          type: integer
+          format: int64
+          description: Usuario invitado
+        nombre:
+          type: string
+          description: Nombre del usuario invitado
+        estado:
+          $ref: '#/components/schemas/EstadoInvitacion'
+
+    EstadoInvitacion:
+      type: string
+      enum: [PENDIENTE, ACEPTADA, RECHAZADA]
+
+    InvitacionRequest:
+      type: object
+      required: [usuarioId]
+      properties:
+        usuarioId:
+          type: integer
+          format: int64
+
+    InvitacionRecibida:
+      type: object
+      required: [id, reserva]
+      properties:
+        id:
+          type: integer
+          format: int64
+        reserva:
+          description: 'La reserva, con `detalle: COMPLETO` (sin `invitaciones`)'
+          allOf:
+            - $ref: '#/components/schemas/Reserva'
+
+    ZonaHoraria:
+      type: object
+      required: [zonaHoraria]
+      properties:
+        zonaHoraria:
+          type: string
+          description: Identificador IANA
+          minLength: 1
+          examples: [Europe/Madrid]
 
     LoginRequest:
       type: object
