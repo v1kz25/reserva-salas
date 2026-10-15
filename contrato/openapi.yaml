@@ -8,7 +8,7 @@ info:
     Reglas de negocio de las reservas:
     - No puede haber reservas solapadas en la misma sala (`409`).
     - `horaFin` debe ser posterior a `horaInicio` (`400`).
-    - No se puede reservar en el pasado (`400`).
+    - Solo se reserva a partir de mañana: `fecha` debe ser posterior a hoy (`400`).
 
     Todos los errores usan el formato `ProblemDetail` (RFC 9457).
   license:
@@ -142,10 +142,20 @@ paths:
           schema:
             type: integer
             format: int64
-        - name: fecha
+        - name: fechaDesde
           in: query
           required: false
-          description: Solo las reservas de este día
+          description: Solo las reservas de este día o posteriores (inclusive)
+          schema:
+            type: string
+            format: date
+        - name: fechaHasta
+          in: query
+          required: false
+          description: |
+            Solo las reservas de este día o anteriores (inclusive).
+            Si se indican ambas, `fechaHasta` no puede ser anterior a `fechaDesde` (`400`).
+            Para un solo día, se envía la misma fecha en las dos.
           schema:
             type: string
             format: date
@@ -301,7 +311,7 @@ components:
         fecha:
           type: string
           format: date
-          description: No puede ser anterior a hoy
+          description: Debe ser posterior a hoy (se reserva a partir de mañana)
         horaInicio:
           $ref: '#/components/schemas/Hora'
         horaFin:
