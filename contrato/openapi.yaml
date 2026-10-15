@@ -10,6 +10,22 @@ info:
     - `horaFin` debe ser posterior a `horaInicio` (`400`).
     - Solo se reserva a partir de mañana: `fecha` debe ser posterior a hoy (`400`).
 
+    Autenticación y permisos:
+    - Sesión HTTP en cookie (`JSESSIONID`, `HttpOnly`, `SameSite=Strict`). Se obtiene con
+      `POST /api/auth/login` y se cierra con `POST /api/auth/logout`.
+    - Todas las rutas `/api/**` exigen sesión, salvo `GET /api/auth/csrf` y `POST /api/auth/login`.
+      Sin sesión (o con la sesión caducada) responden `401`.
+    - Roles `USER` y `ADMIN`. Un `USER` solo cancela sus propias reservas; un `ADMIN`, cualquiera.
+      Crear, modificar y eliminar salas es solo para `ADMIN`. Sin permiso se responde `403`.
+    - El responsable de una reserva es siempre el usuario que la crea.
+
+    Protección CSRF:
+    - El servidor envía el token en la cookie `XSRF-TOKEN` (legible desde JavaScript).
+    - Toda petición `POST`, `PUT` o `DELETE` (incluido el login) debe repetirlo en la cabecera
+      `X-XSRF-TOKEN`; si falta o no coincide se responde `403`.
+    - Antes del login, `GET /api/auth/csrf` emite la cookie. Tras el login y el logout el token
+      cambia: el cliente debe usar siempre el valor actual de la cookie.
+
     Todos los errores usan el formato `ProblemDetail` (RFC 9457).
   license:
     name: MIT
@@ -17,14 +33,101 @@ info:
 servers:
   - url: http://localhost:8080
     description: Desarrollo local
-security: []
+security:
+  - sesion: []
 tags:
+  - name: Autenticación
+    description: Inicio y cierre de sesión y usuario actual
   - name: Salas
     description: Salas de reuniones disponibles
   - name: Reservas
     description: Reservas de una sala en una franja horaria
 
 paths:
+  /api/auth/csrf:
+    get:
+      tags: [Autenticación]
+      operationId: obtenerCsrf
+      summary: Emite la cookie del token CSRF
+      description: No requiere sesión. Responde con la cookie `XSRF-TOKEN` y sin cuerpo.
+      security: []
+      responses:
+        '204':
+          description: Cookie `XSRF-TOKEN` emitida
+          headers:
+            Set-Cookie:
+              description: '`XSRF-TOKEN=<token>; Path=/; SameSite=Strict`'
+              schema:
+                type: string
+
+  /api/auth/login:
+    post:
+      tags: [Autenticación]
+      operationId: iniciarSesion
+      summary: Inicia sesión
+      description: |
+        No requiere sesión, pero sí la cabecera `X-XSRF-TOKEN`. Si ya había una sesión, se
+        sustituye por una nueva.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Sesión iniciada
+          headers:
+            Set-Cookie:
+              description: '`JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Strict` y un nuevo `XSRF-TOKEN`'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '400':
+          $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          description: |
+            Credenciales no válidas. El mensaje es el mismo si el email no existe o si la
+            contraseña es incorrecta.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+
+  /api/auth/logout:
+    post:
+      tags: [Autenticación]
+      operationId: cerrarSesion
+      summary: Cierra la sesión
+      responses:
+        '204':
+          description: Sesión cerrada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          $ref: '#/components/responses/SinPermiso'
+
+  /api/auth/me:
+    get:
+      tags: [Autenticación]
+      operationId: obtenerUsuarioActual
+      summary: Obtiene el usuario de la sesión
+      responses:
+        '200':
+          description: Usuario autenticado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Usuario'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+
   /api/salas:
     get:
       tags: [Salas]
@@ -39,6 +142,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Sala'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
     post:
       tags: [Salas]
       operationId: crearSala
@@ -63,6 +168,14 @@ paths:
                 $ref: '#/components/schemas/Sala'
         '400':
           $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
         '409':
           description: Ya existe una sala con ese nombre
           content:
@@ -84,6 +197,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Sala'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '404':
           $ref: '#/components/responses/NoEncontrado'
     put:
@@ -105,6 +220,14 @@ paths:
                 $ref: '#/components/schemas/Sala'
         '400':
           $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
         '404':
           $ref: '#/components/responses/NoEncontrado'
         '409':
@@ -120,6 +243,14 @@ paths:
       responses:
         '204':
           description: Sala eliminada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: El usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
         '404':
           $ref: '#/components/responses/NoEncontrado'
         '409':
@@ -170,10 +301,13 @@ paths:
                   $ref: '#/components/schemas/Reserva'
         '400':
           $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
     post:
       tags: [Reservas]
       operationId: crearReserva
       summary: Crea una reserva
+      description: El responsable es el usuario de la sesión.
       requestBody:
         required: true
         content:
@@ -194,6 +328,14 @@ paths:
                 $ref: '#/components/schemas/Reserva'
         '400':
           $ref: '#/components/responses/ErrorValidacion'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: Falta el token CSRF o no es válido
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
         '404':
           description: La sala indicada no existe
           content:
@@ -217,20 +359,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Reserva'
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
         '404':
           $ref: '#/components/responses/NoEncontrado'
     delete:
       tags: [Reservas]
       operationId: cancelarReserva
       summary: Cancela una reserva
-      description: La reserva se elimina y la franja queda libre.
+      description: |
+        La reserva se elimina y la franja queda libre. Un `USER` solo puede cancelar sus propias
+        reservas; un `ADMIN`, cualquiera.
       responses:
         '204':
           description: Reserva cancelada
+        '401':
+          $ref: '#/components/responses/NoAutenticado'
+        '403':
+          description: La reserva es de otro usuario y el usuario no es `ADMIN`, o falta el token CSRF
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
         '404':
           $ref: '#/components/responses/NoEncontrado'
 
 components:
+  securitySchemes:
+    sesion:
+      type: apiKey
+      in: cookie
+      name: JSESSIONID
+      description: Cookie de sesión `HttpOnly` que se obtiene con `POST /api/auth/login`
+
   parameters:
     Id:
       name: id
@@ -276,7 +437,7 @@ components:
 
     Reserva:
       type: object
-      required: [id, salaId, fecha, horaInicio, horaFin, responsable, motivo]
+      required: [id, salaId, fecha, horaInicio, horaFin, usuarioId, responsable, motivo]
       properties:
         id:
           type: integer
@@ -294,8 +455,15 @@ components:
           $ref: '#/components/schemas/Hora'
         horaFin:
           $ref: '#/components/schemas/Hora'
+        usuarioId:
+          type: integer
+          format: int64
+          description: Usuario que hizo la reserva
+          examples: [7]
         responsable:
           type: string
+          readOnly: true
+          description: Nombre del usuario que hizo la reserva
           examples: [Ana García]
         motivo:
           type: string
@@ -303,7 +471,7 @@ components:
 
     ReservaRequest:
       type: object
-      required: [salaId, fecha, horaInicio, horaFin, responsable, motivo]
+      required: [salaId, fecha, horaInicio, horaFin, motivo]
       properties:
         salaId:
           type: integer
@@ -316,14 +484,46 @@ components:
           $ref: '#/components/schemas/Hora'
         horaFin:
           $ref: '#/components/schemas/Hora'
-        responsable:
-          type: string
-          minLength: 1
-          maxLength: 100
         motivo:
           type: string
           minLength: 1
           maxLength: 255
+
+    Usuario:
+      type: object
+      required: [id, email, nombre, rol]
+      properties:
+        id:
+          type: integer
+          format: int64
+          examples: [7]
+        email:
+          type: string
+          format: email
+          examples: [ana@example.com]
+        nombre:
+          type: string
+          examples: [Ana García]
+        rol:
+          $ref: '#/components/schemas/Rol'
+
+    Rol:
+      type: string
+      enum: [USER, ADMIN]
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
 
     Hora:
       type: string
@@ -379,6 +579,18 @@ components:
             $ref: '#/components/schemas/ProblemDetail'
     NoEncontrado:
       description: Recurso no encontrado
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+    NoAutenticado:
+      description: No hay sesión o ha caducado
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+    SinPermiso:
+      description: Sin permiso para la operación, o falta el token CSRF
       content:
         application/problem+json:
           schema:
