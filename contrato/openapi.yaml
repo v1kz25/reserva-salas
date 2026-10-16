@@ -118,6 +118,19 @@ paths:
                 $ref: '#/components/schemas/ProblemDetail'
         '403':
           $ref: '#/components/responses/SinPermiso'
+        '429':
+          description: |
+            Demasiados intentos fallidos para ese email desde la misma IP. Se informa en `Retry-After`
+            de cuántos segundos hay que esperar. El mensaje es el mismo exista o no el email.
+          headers:
+            Retry-After:
+              description: Segundos que hay que esperar antes de volver a intentarlo
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
 
   /api/auth/logout:
     post:
